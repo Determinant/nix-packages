@@ -1,6 +1,17 @@
 # nix-packages
 
-Personal Nix packages, exposed as a flake.
+Personal Nix packages, exposed as standalone flake packages and through the
+default overlay.
+
+## Available packages
+
+- `darktable` and `darktable-ai`
+- `darkly`, `darkly-qt5`, and `darkly-gtk`
+- `ted-neroaac-bin`
+- `ted-ortho4xp-deps`
+
+`darkly-qt5` is available through the overlay when the consumer's nixpkgs still
+provides the underlying Qt 5 package, including NixOS 25.11.
 
 ## darktable
 
@@ -17,13 +28,13 @@ nix build path:.#darktable
 Install locally into the current user's Nix profile:
 
 ```sh
-nix profile install path:.#darktable
+nix profile add path:.#darktable
 ```
 
-After publishing this repository to GitHub:
+Install from GitHub:
 
 ```sh
-nix profile install github:Determinant/nix-packages#darktable
+nix profile add github:Determinant/nix-packages#darktable
 ```
 
 Use `#darktable-ai` instead of `#darktable` to enable darktable's optional AI

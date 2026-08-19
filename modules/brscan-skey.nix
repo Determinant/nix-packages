@@ -12,7 +12,7 @@ let
     cfg_dir="$HOME/.brscan-skey"
     ${pkgs.coreutils}/bin/mkdir -p "$cfg_dir"
 
-    pkg_skey="${pkgs.brscan-skey}/opt/brother/scanner/brscan-skey"
+    pkg_skey="${cfg.package}/opt/brother/scanner/brscan-skey"
 
     for cfg in scantoemail.config scantofile.config scantoimage.config scantoocr.config; do
       if [ ! -e "$cfg_dir/$cfg" ]; then
@@ -138,7 +138,7 @@ let
         --proc /proc \
         --bind "$runtime_opt_skey" /opt/brother/scanner/brscan-skey \
         --bind "$runtime_etc_scanner" /etc/opt/brother/scanner \
-        ${pkgs.brscan-skey}/bin/brscan-skey "$@"
+        ${cfg.package}/bin/brscan-skey "$@"
     }
 
     scanner_ip=""
@@ -223,10 +223,12 @@ let
   '';
 in
 {
-  options.ted.brscanSkey.enable = lib.mkOption {
-    type = lib.types.bool;
-    default = true;
-    description = "Enable Brother scan-to-PC integration (brscan-skey daemon).";
+  options.ted.brscanSkey = {
+    enable = lib.mkEnableOption "Brother scan-to-PC integration (brscan-skey daemon)" // {
+      default = true;
+    };
+
+    package = lib.mkPackageOption pkgs "brscan-skey" { };
   };
 
   config = lib.mkIf cfg.enable {
@@ -259,7 +261,7 @@ in
       "d /opt/brother/scanner 0755 root root -"
       "L+ /opt/brother/scanner/brscan5 - - - - ${pkgs.brscan5}/opt/brother/scanner/brscan5"
       "d /opt/brother/scanner/brscan-skey 0755 root root -"
-      "C /opt/brother/scanner/brscan-skey - - - - ${pkgs.brscan-skey}/opt/brother/scanner/brscan-skey"
+      "C /opt/brother/scanner/brscan-skey - - - - ${cfg.package}/opt/brother/scanner/brscan-skey"
     ];
   };
 }

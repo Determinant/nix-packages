@@ -44,7 +44,7 @@
           darkly = mkDarkly pkgs.darkly;
           darkly-gtk = pkgs.callPackage ./packages/darkly-gtk.nix { };
           darktable-ai = darktable.override { withAi = true; };
-          ted-ortho4xp-deps = pkgs.callPackage ./packages/ortho4xp-deps.nix { inherit pkgs; };
+          ted-ortho4xp-deps = pkgs.callPackage ./packages/ortho4xp-deps.nix { };
           default = darktable;
         }
         // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
@@ -77,7 +77,7 @@
           darkly-qt5 = mkDarkly prev.darkly-qt5;
           darkly-gtk = final.callPackage ./packages/darkly-gtk.nix { };
           darktable-latest-ai = darktable-latest.override { withAi = true; };
-          ted-ortho4xp-deps = final.callPackage ./packages/ortho4xp-deps.nix { pkgs = final; };
+          ted-ortho4xp-deps = final.callPackage ./packages/ortho4xp-deps.nix { };
         }
         // prev.lib.optionalAttrs (prev.stdenv.hostPlatform.system == "x86_64-linux") {
           brscan-skey = final.callPackage ./packages/brscan-skey.nix { };

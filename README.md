@@ -7,11 +7,20 @@ default overlay.
 
 - `darktable` and `darktable-ai`
 - `darkly`, `darkly-qt5`, and `darkly-gtk`
+- `brscan-skey`
+- `ted-google-chrome` and `ted-morgen`
 - `ted-neroaac-bin`
 - `ted-ortho4xp-deps`
 
 `darkly-qt5` is available through the overlay when the consumer's nixpkgs still
 provides the underlying Qt 5 package, including NixOS 25.11.
+
+`brscan-skey`, `ted-google-chrome`, `ted-morgen`, and `ted-neroaac-bin` are
+available on x86_64 Linux only. These packages contain unfree software.
+
+The default overlay provides every package attribute. The Brscan package also
+has a NixOS integration module at `nixosModules.brscan-skey`; consumers should
+apply the default overlay before importing the module.
 
 ## darktable
 

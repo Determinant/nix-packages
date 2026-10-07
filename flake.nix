@@ -4,7 +4,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       supportedSystems = [
         "x86_64-linux"
@@ -41,6 +41,7 @@
         in
         {
           inherit darktable;
+          helium = pkgs.callPackage ./packages/helium.nix { };
           darkly = mkDarkly pkgs.darkly;
           darkly-gtk = pkgs.callPackage ./packages/darkly-gtk.nix { };
           darktable-ai = darktable.override { withAi = true; };
@@ -60,6 +61,10 @@
     {
       packages = forAllSystems mkPackages;
 
+      checks = forAllSystems (system: {
+        helium = self.packages.${system}.helium;
+      });
+
       overlays.default =
         final: prev:
         let
@@ -73,6 +78,7 @@
         in
         {
           inherit darktable-latest;
+          helium = final.callPackage ./packages/helium.nix { };
           darkly = mkDarkly prev.darkly;
           darkly-qt5 = mkDarkly prev.darkly-qt5;
           darkly-gtk = final.callPackage ./packages/darkly-gtk.nix { };

@@ -1,0 +1,163 @@
+name: Helium
+
+on:
+  push:
+    paths:
+      - "packages/helium*"
+      - "scripts/update-helium.py"
+      - "tests/*helium*.py"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/helium.yml"
+  pull_request:
+    paths:
+      - "packages/helium*"
+      - "scripts/update-helium.py"
+      - "tests/*helium*.py"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/helium.yml"
+  schedule:
+    - cron: "43 8 * * *" # Daily Helium release check.
+    - cron: "13 9 * * 1" # Weekly shared Nixpkgs dependency refresh.
+  workflow_dispatch:
+    inputs:
+      refresh_dependencies:
+        description: "Refresh Nixpkgs instead of checking for a Helium release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helium-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+      branch: ${{ steps.update.outputs.branch }}
+      title: ${{ steps.update.outputs.title }}
+    env:
+      REFRESH_DEPENDENCIES: ${{ github.event.schedule == '13 9 * * 1' || inputs.refresh_dependencies == true }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test updater
+        run: python3 -m unittest discover -s tests -p test_helium_updater.py
+      - uses: cachix/install-nix-action@v31
+        if: env.REFRESH_DEPENDENCIES == 'true'
+      - name: Prepare release or dependency update
+        id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$REFRESH_DEPENDENCIES" = true ]; then
+            nix flake update nixpkgs
+            echo "branch=update-nixpkgs" >> "$GITHUB_OUTPUT"
+            echo "title=nixpkgs: refresh dependencies" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/update-helium.py
+            version=$(python3 -c 'import json; print(json.load(open("packages/helium-sources.json"))["version"])')
+            echo "branch=update-helium" >> "$GITHUB_OUTPUT"
+            echo "title=helium: update to $version" >> "$GITHUB_OUTPUT"
+          fi
+          if git diff --quiet -- packages/helium-sources.json flake.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.update.outputs.changed == 'true'
+        with:
+          name: helium-update
+          path: |
+            packages/helium-sources.json
+            flake.lock
+
+  build:
+    needs: update
+    if: >-
+      always() && !cancelled() &&
+      (needs.update.result == 'skipped' ||
+       (needs.update.result == 'success' && needs.update.outputs.changed == 'true'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test updater
+        run: python3 -m unittest discover -s tests -p test_helium_updater.py
+      - uses: actions/download-artifact@v4
+        if: needs.update.outputs.changed == 'true'
+        with:
+          name: helium-update
+          path: .
+      - uses: cachix/install-nix-action@v31
+      - name: Evaluate all flake outputs
+        run: nix flake check --no-build --all-systems path:.
+      - name: Build, check version, and validate desktop entry
+        run: nix build --print-build-logs --out-link result-helium path:.#checks.${{ matrix.system }}.helium
+      - name: Exercise renderer with sandbox enabled
+        run: |
+          # Ubuntu 24.04 requires an AppArmor exception for custom browsers to
+          # create user namespaces. Scope it to this binary on the CI runner.
+          # https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] &&
+             [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+            helium_binary="$(readlink -f result-helium)/opt/helium/helium"
+            helium_aa_profile="$RUNNER_TEMP/helium-apparmor"
+            cat > "$helium_aa_profile" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile helium-ci "$helium_binary" flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser --replace "$helium_aa_profile"
+            trap 'sudo apparmor_parser --remove "$helium_aa_profile"' EXIT
+          fi
+          python3 tests/helium_smoke.py ./result-helium/bin/helium
+
+  pull-request:
+    needs: [update, build]
+    if: needs.update.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: helium-update
+          path: .
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ${{ needs.update.outputs.branch }}
+          delete-branch: true
+          add-paths: |
+            packages/helium-sources.json
+            flake.lock
+          commit-message: ${{ needs.update.outputs.title }}
+          title: ${{ needs.update.outputs.title }}
+          body: |
+            Update pinned Helium binaries or the shared Nixpkgs dependencies.
+
+            All flake outputs evaluated successfully. Helium built, passed its
+            version and desktop-file checks, and ran the sandboxed renderer,
+            JavaScript, and local-storage smoke test on x86_64-linux and
+            aarch64-linux in the workflow that created this PR.
+
+            GPU acceleration, audio, and interactive PWA installation still
+            need desktop testing. A flake.lock change also affects the other
+            packages: those were evaluated but not built by this workflow.

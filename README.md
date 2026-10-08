@@ -23,6 +23,26 @@ The default overlay provides every package attribute. The Brscan package also
 has a NixOS integration module at `nixosModules.brscan-skey`; consumers should
 apply the default overlay before importing the module.
 
+## Morgen
+
+`ted-morgen` provides the X11 launcher and a managed KDE autostart entry. The
+launcher disables the app-generated autostart entry on normal exit and failure,
+preserving the application's exit status.
+
+For KDE desktops affected by Chromium unloading GTK modules, retain them with:
+
+```nix
+pkgs.ted-morgen.override {
+  gtkModules = [ "colorreload-gtk-module" "window-decorations-gtk-module" ];
+}
+```
+
+These modules must be available through the desktop's `GTK_PATH`. The default
+leaves `GTK_MODULES` unchanged. Run the isolated launcher regression checks with
+`nix build .#checks.x86_64-linux.morgen-wrapper`; they exercise normal and failed
+exits, both configuration locations, argument forwarding, and GTK environment
+preservation without launching Morgen or modifying the user's profile.
+
 ## darktable
 
 The default package is darktable 5.6.0, the latest stable upstream release. The

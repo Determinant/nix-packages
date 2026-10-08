@@ -6,6 +6,7 @@
   perl,
   runtimeShell,
   symlinkJoin,
+  gtkModules ? [ ],
 }:
 symlinkJoin {
   name = "ted-morgen";
@@ -20,7 +21,10 @@ symlinkJoin {
     makeWrapper ${morgen}/bin/morgen "$out/bin/morgen" \
       --unset NIXOS_OZONE_WL \
       --add-flags "--ozone-platform=x11" \
-      --add-flags "--class=morgen"
+      --add-flags "--class=morgen" \
+      ${lib.optionalString (
+        gtkModules != [ ]
+      ) "--prefix GTK_MODULES : ${lib.escapeShellArg (lib.concatStringsSep ":" gtkModules)}"}
 
     # Keep the app-managed per-user autostart entry disabled so only the
     # managed NixOS autostart entry is used.
@@ -45,15 +49,10 @@ symlinkJoin {
 
     disable_app_managed_autostart
 
-    "$out/bin/morgen" "\$@"
-    status=\$?
-
     # Morgen can rewrite ~/.config/autostart/morgen.desktop during runtime.
-    # Rewrite it once more on exit so the next login does not regenerate the
-    # crashing app-morgen@autostart unit.
-    disable_app_managed_autostart
-
-    exit "\$status"
+    # Clean up on both success and failure, retaining the application's status.
+    trap disable_app_managed_autostart EXIT
+    "$out/bin/morgen" "\$@"
     EOF_MORGEN_LAUNCH
     chmod 0755 "$out/bin/morgen-launch"
 

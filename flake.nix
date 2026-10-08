@@ -61,9 +61,17 @@
     {
       packages = forAllSystems mkPackages;
 
-      checks = forAllSystems (system: {
-        helium = self.packages.${system}.helium;
-      });
+      checks = forAllSystems (
+        system:
+        {
+          helium = self.packages.${system}.helium;
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          morgen-wrapper = import ./tests/morgen-wrapper.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+          };
+        }
+      );
 
       overlays.default =
         final: prev:

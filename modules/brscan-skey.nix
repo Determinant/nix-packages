@@ -132,10 +132,14 @@ let
     ${pkgs.coreutils}/bin/rm -f "$tmp_skey_cfg"
 
     run_skey() {
+      # Bubblewrap 0.12 needs readable parents for nested binds. A private
+      # /opt preserves the host's permissions, including mode 0711.
       ${pkgs.bubblewrap}/bin/bwrap \
         --bind / / \
         --dev-bind /dev /dev \
         --proc /proc \
+        --tmpfs /opt \
+        --ro-bind /opt/brother /opt/brother \
         --bind "$runtime_opt_skey" /opt/brother/scanner/brscan-skey \
         --bind "$runtime_etc_scanner" /etc/opt/brother/scanner \
         ${cfg.package}/bin/brscan-skey "$@"

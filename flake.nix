@@ -67,6 +67,12 @@
           helium = self.packages.${system}.helium;
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          brscan-skey = import ./tests/brscan-skey.nix {
+            pkgs = import nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+            };
+          };
           morgen-wrapper = import ./tests/morgen-wrapper.nix {
             pkgs = nixpkgs.legacyPackages.${system};
           };

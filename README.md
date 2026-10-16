@@ -19,9 +19,20 @@ provides the underlying Qt 5 package, including NixOS 25.11.
 `brscan-skey`, `ted-google-chrome`, `ted-morgen`, and `ted-neroaac-bin` are
 available on x86_64 Linux only. These packages contain unfree software.
 
-The default overlay provides every package attribute. The Brscan package also
-has a NixOS integration module at `nixosModules.brscan-skey`; consumers should
-apply the default overlay before importing the module.
+The default overlay provides every package attribute.
+
+## Brother scan-to-PC
+
+Import `nixosModules.brscan-skey` alongside the default overlay, then run
+`systemctl --user start brscan-skey.service` to enable the scanner's PC button.
+The service mounts writable per-user configuration from
+`~/.local/state/brscan-skey` at the vendor's absolute paths. A private `/opt`
+handles Bubblewrap 0.12 with a root-owned mode-0711 host `/opt`.
+
+`nix build path:.#checks.x86_64-linux.brscan-skey` checks unprivileged startup,
+writable state, host permissions, restart and manual stop using Bubblewrap
+0.12 or newer. Discovery and the vendor executable are fixtures; SANE
+registration is real. The test does not perform a physical scan.
 
 ## Morgen
 

@@ -108,6 +108,9 @@ stdenv.mkDerivation {
       "''${gappsWrapperArgs[@]}" \
       --prefix LD_LIBRARY_PATH : "$out/opt/helium:$out/opt/helium/lib:$out/opt/helium/lib.target:${
         lib.makeLibraryPath [
+          # Chromium dlopens GTK, including when Qt delegates printing to it.
+          # buildInputs alone does not retain GTK in the ELF library search path.
+          gtk3
           libGL
           libva
           pipewire
@@ -128,6 +131,17 @@ stdenv.mkDerivation {
   doInstallCheck = true;
   postInstallCheck = ''
     desktop-file-validate "$out/share/applications/helium.desktop"
+    # Run inside the real launcher environment, before browser startup. This
+    # catches missing dlopen dependencies without a display or browser profile.
+    $CC -shared -fPIC -Wall -Wextra -Werror \
+      ${../tests/helium_runtime.c} -o "$TMPDIR/helium-runtime-check.so" -ldl
+    runtimeCheckOutput=$(env -u LD_LIBRARY_PATH \
+      HELIUM_RUNTIME_CHECK_TARGET="$out/opt/helium/helium" \
+      LD_PRELOAD="$TMPDIR/helium-runtime-check.so" \
+      "$out/bin/helium" --version)
+    echo "$runtimeCheckOutput"
+    test "$runtimeCheckOutput" = \
+      'Helium: GTK library and printing entry points loaded through the launcher'
   '';
 
   meta = {

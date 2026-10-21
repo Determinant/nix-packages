@@ -5,7 +5,7 @@ on:
     paths:
       - "packages/helium*"
       - "scripts/update-helium.py"
-      - "tests/*helium*.py"
+      - "tests/*helium*"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/helium.yml"
@@ -13,7 +13,7 @@ on:
     paths:
       - "packages/helium*"
       - "scripts/update-helium.py"
-      - "tests/*helium*.py"
+      - "tests/*helium*"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/helium.yml"
@@ -105,7 +105,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - name: Evaluate all flake outputs
         run: nix flake check --no-build --all-systems path:.
-      - name: Build, check version, and validate desktop entry
+      - name: Build, check version, GTK printing libraries, and desktop entry
         run: nix build --print-build-logs --out-link result-helium path:.#checks.${{ matrix.system }}.helium
       - name: Exercise renderer with sandbox enabled
         run: |
@@ -154,7 +154,7 @@ jobs:
             Update pinned Helium binaries or the shared Nixpkgs dependencies.
 
             All flake outputs evaluated successfully. Helium built, passed its
-            version and desktop-file checks, and ran the sandboxed renderer,
+            version, GTK printing-library, and desktop-file checks, and ran the sandboxed renderer,
             JavaScript, and local-storage smoke test on x86_64-linux and
             aarch64-linux in the workflow that created this PR.
 

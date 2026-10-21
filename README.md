@@ -126,7 +126,11 @@ Additional flags can be supplied with
 `pkgs.helium.override { commandLineArgs = [ "--ozone-platform=wayland" ]; }`.
 The package preserves the browser's default sandbox and update notifications.
 Only the Qt 6 integration shim is shipped; dependency checks have no Qt 5
-exceptions.
+exceptions. GTK is also available at runtime because Chromium's Qt integration
+delegates printing to GTK. The package's install check loads GTK and its printing
+entry points through the actual launcher, without starting a browser or touching
+a profile. This check catches missing dynamically loaded libraries; it does not
+send a job to a physical printer.
 
 Update to the latest official stable release, or select a version explicitly:
 

@@ -16,6 +16,8 @@
         "brscan4"
         "brscan5"
         "brother-udev-rule-type1"
+        "discord"
+        "discord-unwrapped"
         "google-chrome"
         "morgen"
         "ted-google-chrome"
@@ -50,6 +52,7 @@
         }
         // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
           brscan-skey = pkgs.callPackage ./packages/brscan-skey.nix { };
+          discord = import ./packages/discord.nix { inherit pkgs; };
           ted-google-chrome = pkgs.callPackage ./packages/google-chrome-wrapper.nix { };
           ted-morgen = pkgs.callPackage ./packages/morgen-wrapper.nix { };
           ted-neroaac-bin = pkgs.callPackage ./packages/neroaac-bin.nix { };
@@ -101,6 +104,10 @@
         }
         // prev.lib.optionalAttrs (prev.stdenv.hostPlatform.system == "x86_64-linux") {
           brscan-skey = final.callPackage ./packages/brscan-skey.nix { };
+          discord = import ./packages/discord.nix {
+            pkgs = final;
+            package = prev.discord;
+          };
           ted-google-chrome = final.callPackage ./packages/google-chrome-wrapper.nix { };
           ted-morgen = final.callPackage ./packages/morgen-wrapper.nix { };
           ted-neroaac-bin = final.callPackage ./packages/neroaac-bin.nix { };

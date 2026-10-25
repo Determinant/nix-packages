@@ -9,6 +9,7 @@ default overlay.
 - `helium`
 - `darkly`, `darkly-qt5`, and `darkly-gtk`
 - `brscan-skey`
+- `discord`
 - `ted-google-chrome` and `ted-morgen`
 - `ted-neroaac-bin`
 - `ted-ortho4xp-deps`
@@ -16,8 +17,9 @@ default overlay.
 `darkly-qt5` is available through the overlay when the consumer's nixpkgs still
 provides the underlying Qt 5 package, including NixOS 25.11.
 
-`brscan-skey`, `ted-google-chrome`, `ted-morgen`, and `ted-neroaac-bin` are
-available on x86_64 Linux only. These packages contain unfree software.
+`brscan-skey`, `discord`, `ted-google-chrome`, `ted-morgen`, and
+`ted-neroaac-bin` are available on x86_64 Linux only. These packages contain
+unfree software.
 
 The default overlay provides every package attribute.
 
@@ -33,6 +35,19 @@ handles Bubblewrap 0.12 with a root-owned mode-0711 host `/opt`.
 writable state, host permissions, restart and manual stop using Bubblewrap
 0.12 or newer. Discovery and the vendor executable are fixtures; SANE
 registration is real. The test does not perform a physical scan.
+
+## Discord
+
+`discord` uses the consumer's Nixpkgs version and dependencies, with the exact
+[upstream KDE/Wayland scaling fix](https://github.com/NixOS/nixpkgs/pull/552157)
+backported when absent. The default overlay supplies it as `pkgs.discord`;
+`nix build path:.#discord` builds the standalone package. If Nixpkgs already
+contains this fix, the original package is reused unchanged.
+
+On KDE Wayland, the upstream launcher adds `--force-device-scale-factor=1` to
+avoid multiplying GTK DPI scaling by the Wayland surface scale. Other desktop
+sessions keep the upstream behavior. Fully quit Discord and reopen it after
+installing the updated package.
 
 ## Morgen
 

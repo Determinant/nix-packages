@@ -7,18 +7,18 @@
 let
   chromeAngleFlags = "--use-gl=angle --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE";
   googleChrome = google-chrome.overrideAttrs (
-    finalAttrs: _previousAttrs: {
+    finalAttrs: prevAttrs: {
       version = "151.0.7922.173";
       src = fetchurl {
         url = "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${finalAttrs.version}-1_amd64.deb";
         hash = "sha256-h45atJW4ppSYD8phvAmzfmUcztziKRxzQ00W5IomRv0=";
       };
 
-      # Chrome 151 no longer ships lib*GL* files; nixos-25.11 still tries to
-      # patch them, while current nixpkgs has removed this obsolete command.
+      # Chrome 151 dropped lib*GL* files. Remove the patching step inherited
+      # from Nixpkgs versions that still expect them, such as nixos-25.11.
       installPhase =
         builtins.replaceStrings [ "patchelf --set-rpath $rpath $out/share/google/$appname/lib*GL*" ] [ ":" ]
-          _previousAttrs.installPhase;
+          prevAttrs.installPhase;
     }
   );
 in

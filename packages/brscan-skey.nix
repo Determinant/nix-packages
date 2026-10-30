@@ -63,7 +63,7 @@ stdenvNoCC.mkDerivation rec {
     description = "Brother Scan Key Tool for push scanning from MFP panel";
     homepage = "https://support.brother.com/";
     license = lib.licenses.unfree;
-    sourceProvenance = with lib.sourceTypes; [ binaryNativeCode ];
+    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
     platforms = [ "x86_64-linux" ];
     mainProgram = "brscan-skey";
   };

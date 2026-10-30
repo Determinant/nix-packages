@@ -66,7 +66,7 @@ let
     runtime_lib_path="${
       lib.makeLibraryPath [
         pkgs.sane-backends
-        pkgs."avahi-compat"
+        pkgs.avahi-compat
       ]
     }:${pkgs.brscan4}/lib/sane:${pkgs.brscan5}/lib/sane"
     if [ -n "''${LD_LIBRARY_PATH:-}" ]; then

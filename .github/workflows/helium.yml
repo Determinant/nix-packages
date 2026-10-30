@@ -103,6 +103,8 @@ jobs:
           name: helium-update
           path: .
       - uses: cachix/install-nix-action@v31
+      - name: Check Nix formatting
+        run: nix fmt -- --ci
       - name: Evaluate all flake outputs
         run: nix flake check --no-build --all-systems path:.
       - name: Build, check version, GTK printing libraries, and desktop entry
@@ -151,13 +153,13 @@ jobs:
           commit-message: ${{ needs.update.outputs.title }}
           title: ${{ needs.update.outputs.title }}
           body: |
-            Update pinned Helium binaries or the shared Nixpkgs dependencies.
+            Update the Helium release or shared Nixpkgs pin.
 
-            All flake outputs evaluated successfully. Helium built, passed its
-            version, GTK printing-library, and desktop-file checks, and ran the sandboxed renderer,
-            JavaScript, and local-storage smoke test on x86_64-linux and
-            aarch64-linux in the workflow that created this PR.
+            Nix formatting and flake evaluation passed. Helium built on
+            x86_64-linux and aarch64-linux, including the version, desktop-file,
+            and GTK printing-library checks. The headless test passed rendering,
+            JavaScript, storage, and namespace/seccomp sandbox checks on both.
 
-            GPU acceleration, audio, and interactive PWA installation still
-            need desktop testing. A flake.lock change also affects the other
-            packages: those were evaluated but not built by this workflow.
+            GPU acceleration, audio, web app installation, and physical printing
+            need manual testing. Other packages were evaluated but not built;
+            review changes to flake.lock for their effect on those packages.

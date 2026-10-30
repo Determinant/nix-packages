@@ -1,193 +1,174 @@
 # nix-packages
 
-Personal Nix packages, exposed as standalone flake packages and through the
-default overlay.
+Personal packages and desktop wrappers for NixOS, available as flake packages
+and a Nixpkgs overlay.
 
-## Available packages
+## Packages
 
-- `darktable` and `darktable-ai`
-- `helium`
-- `darkly`, `darkly-qt5`, and `darkly-gtk`
-- `brscan-skey`
-- `discord`
-- `ted-google-chrome` and `ted-morgen`
-- `ted-neroaac-bin`
-- `ted-ortho4xp-deps`
+| Flake package | Overlay attribute | Purpose |
+| --- | --- | --- |
+| `darktable` | `darktable-latest` | darktable without the optional AI subsystem |
+| `darktable-ai` | `darktable-latest-ai` | darktable with ONNX Runtime support |
+| `helium` | `helium` | Official Helium Linux binaries |
+| `darkly`, `darkly-qt5` | Same names | Darkly Qt themes |
+| `darkly-gtk` | `darkly-gtk` | Darkly GTK theme |
+| `brscan-skey` | `brscan-skey` | Brother scan-to-PC button support |
+| `discord` | `discord` | Discord with the KDE Wayland scaling fix |
+| `ted-google-chrome` | `ted-google-chrome` | Pinned Chrome build with Vulkan/ANGLE flags |
+| `ted-morgen` | `ted-morgen` | Morgen X11 launcher and KDE autostart |
+| `ted-neroaac-bin` | `ted-neroaac-bin` | Archived Nero AAC encoder, decoder, and tagger |
+| `ted-ortho4xp-deps` | `ted-ortho4xp-deps` | Python and native dependencies for a separate Ortho4XP checkout |
 
-`darkly-qt5` is available through the overlay when the consumer's nixpkgs still
-provides the underlying Qt 5 package, including NixOS 25.11.
+The default package is `darktable`. The flake targets `x86_64-linux` and
+`aarch64-linux`, except for `brscan-skey`, `discord`, `ted-google-chrome`,
+`ted-morgen`, and `ted-neroaac-bin`, which are x86_64-only and contain unfree
+software. Standalone builds allow those packages; overlay users must allow
+unfree packages in their own Nixpkgs configuration.
 
-`brscan-skey`, `discord`, `ted-google-chrome`, `ted-morgen`, and
-`ted-neroaac-bin` are available on x86_64 Linux only. These packages contain
-unfree software.
+`darkly-qt5` requires a Nixpkgs version that provides the Qt 5 package. It is
+omitted from the standalone outputs when unavailable.
 
-The default overlay provides every package attribute.
+## Use
 
-## Brother scan-to-PC
-
-Import `nixosModules.brscan-skey` alongside the default overlay, then run
-`systemctl --user start brscan-skey.service` to enable the scanner's PC button.
-The service mounts writable per-user configuration from
-`~/.local/state/brscan-skey` at the vendor's absolute paths. A private `/opt`
-handles Bubblewrap 0.12 with a root-owned mode-0711 host `/opt`.
-
-`nix build path:.#checks.x86_64-linux.brscan-skey` checks unprivileged startup,
-writable state, host permissions, restart and manual stop using Bubblewrap
-0.12 or newer. Discovery and the vendor executable are fixtures; SANE
-registration is real. The test does not perform a physical scan.
-
-## Discord
-
-`discord` uses the consumer's Nixpkgs version and dependencies, with the exact
-[upstream KDE/Wayland scaling fix](https://github.com/NixOS/nixpkgs/pull/552157)
-backported when absent. The default overlay supplies it as `pkgs.discord`;
-`nix build path:.#discord` builds the standalone package. If Nixpkgs already
-contains this fix, the original package is reused unchanged.
-
-On KDE Wayland, the upstream launcher adds `--force-device-scale-factor=1` to
-avoid multiplying GTK DPI scaling by the Wayland surface scale. Other desktop
-sessions keep the upstream behavior. Fully quit Discord and reopen it after
-installing the updated package.
-
-## Morgen
-
-`ted-morgen` provides the X11 launcher and a managed KDE autostart entry. The
-launcher disables the app-generated autostart entry on normal exit and failure,
-preserving the application's exit status.
-
-For KDE desktops affected by Chromium unloading GTK modules, retain them with:
-
-```nix
-pkgs.ted-morgen.override {
-  gtkModules = [ "colorreload-gtk-module" "window-decorations-gtk-module" ];
-}
-```
-
-These modules must be available through the desktop's `GTK_PATH`. The default
-leaves `GTK_MODULES` unchanged. Run the isolated launcher regression checks with
-`nix build .#checks.x86_64-linux.morgen-wrapper`; they exercise normal and failed
-exits, both configuration locations, argument forwarding, and GTK environment
-preservation without launching Morgen or modifying the user's profile.
-
-## darktable
-
-The default package is darktable 5.6.0, the latest stable upstream release. The
-normal output excludes the optional ONNX Runtime dependency; an AI-enabled
-variant is also available.
-
-Build locally:
-
-```sh
-nix build path:.#darktable
-```
-
-Install locally into the current user's Nix profile:
-
-```sh
-nix profile add path:.#darktable
-```
-
-Install from GitHub:
+Install from GitHub and update later:
 
 ```sh
 nix profile add github:Determinant/nix-packages#darktable
+nix profile upgrade --refresh darktable
 ```
 
-Use `#darktable-ai` instead of `#darktable` to enable darktable's optional AI
-subsystem. Update the profile later with:
-
-```sh
-nix profile upgrade darktable
-```
-
-## Helium
-
-`helium` packages the official stable Linux release binaries for x86_64 and
-ARM64. The release URLs and SHA-256 hashes are pinned in
-`packages/helium-sources.json`; the package does not depend on another community
-Helium flake. It is also available as `pkgs.helium` through the default overlay.
-
-Build or run from this checkout:
+From this checkout:
 
 ```sh
 nix build path:.#helium
 nix run path:.#helium
+nix profile add path:.#helium
 ```
 
-Install this checkout into your user profile:
+A profile installation from a local path follows that checkout on upgrade;
+a GitHub installation follows the repository. Package versions and source hashes
+live in `packages/`, including [Helium's release manifest](packages/helium-sources.json).
+
+To use the overlay, add this repository as a flake input and include its
+`overlays.default` in `nixpkgs.overlays`. Use the overlay column above to select
+packages: for example, `pkgs.darktable-latest` and `pkgs.helium`. The overlay uses
+your configuration's Nixpkgs; standalone builds use this repository's `flake.lock`.
+
+## Package notes
+
+### Helium
+
+Install Helium into your profile or system before creating web apps. Their
+launchers use `helium` from `PATH`, so they keep working across upgrades.
+The package keeps the browser's sandbox and update notifications enabled.
+
+Set extra browser flags through an override:
+
+```nix
+pkgs.helium.override {
+  commandLineArgs = [ "--ozone-platform=wayland" ];
+}
+```
+
+### Morgen
+
+The wrapper runs Morgen on X11 and supplies a KDE autostart entry. It disables
+Morgen's own autostart entry before launch and on exit, including failed exits.
+
+If Chromium unloads GTK modules needed by your KDE desktop, keep them loaded with:
+
+```nix
+pkgs.ted-morgen.override {
+  gtkModules = [
+    "colorreload-gtk-module"
+    "window-decorations-gtk-module"
+  ];
+}
+```
+
+The modules must be available through `GTK_PATH`. Without this override, the
+wrapper preserves the existing `GTK_MODULES` value.
+
+### Brother scan-to-PC
+
+Import `nixosModules.brscan-skey` alongside the overlay. The module enables SANE
+support and installs a user service. Start it with:
 
 ```sh
-nix profile add path:/home/ymf/setup/nix-packages#helium
+systemctl --user start brscan-skey.service
 ```
 
-Once published to GitHub, install with:
+The daemon discovers the scanner on the network and keeps writable vendor
+configuration under `~/.local/state/brscan-skey`. Its module options are
+`ted.brscanSkey.enable` (enabled on import) and `ted.brscanSkey.package`.
+
+### Discord
+
+The package backports the [KDE Wayland scaling fix](https://github.com/NixOS/nixpkgs/pull/552157)
+when it is missing from the selected Nixpkgs. The fix adds
+`--force-device-scale-factor=1` on KDE Wayland to avoid applying DPI scaling twice.
+Fully quit Discord and reopen it after installing the package.
+
+## Development
+
+`packages/` holds package definitions and the Helium manifest, `modules/` holds
+NixOS modules, `scripts/` holds the updater, and `tests/` holds package checks.
+CI workflows live in `.github/workflows/`.
+
+Use the formatter pinned by the flake. Keep Nix indentation at two spaces and
+prefer explicit library references such as `lib.licenses.gpl3Plus`.
 
 ```sh
-nix profile add github:Determinant/nix-packages#helium
+nix fmt
+nix fmt -- --ci
+nix flake check --no-build --all-systems path:.
 ```
 
-Use one of these installation sources. Update later with
-`nix profile upgrade --refresh helium`; a local installation follows this
-checkout, while a GitHub installation follows the published repository.
+The second command fails if formatting changes are needed. The last command
+evaluates the flake for both architectures without building the checks.
 
-The package installs the upstream desktop entry and icon, includes the XDG
-utilities used by web app installation, and sets `CHROME_WRAPPER=helium` so
-generated PWA launchers use the profile's executable rather than a particular
-Nix store version. Install Helium into your profile or system before creating
-PWAs so `helium` remains available on your desktop session's `PATH`.
-Full GUI/PWA behavior still needs testing in your desktop environment.
+Run the package checks individually:
 
-Additional flags can be supplied with
-`pkgs.helium.override { commandLineArgs = [ "--ozone-platform=wayland" ]; }`.
-The package preserves the browser's default sandbox and update notifications.
-Only the Qt 6 integration shim is shipped; dependency checks have no Qt 5
-exceptions. GTK is also available at runtime because Chromium's Qt integration
-delegates printing to GTK. The package's install check loads GTK and its printing
-entry points through the actual launcher, without starting a browser or touching
-a profile. This check catches missing dynamically loaded libraries; it does not
-send a job to a physical printer.
+```sh
+nix build path:.#checks.x86_64-linux.morgen-wrapper
+nix build path:.#checks.x86_64-linux.brscan-skey
+nix build --out-link result-helium path:.#checks.x86_64-linux.helium
+python3 tests/helium_smoke.py ./result-helium/bin/helium
+python3 -m unittest discover -s tests -p test_helium_updater.py
+```
 
-Update to the latest official stable release, or select a version explicitly:
+The Morgen check uses a fake app to test launcher arguments, environment, exit
+status, and autostart cleanup. The Brother VM test uses fake discovery and a fake
+vendor executable, but exercises the real module, SANE registration, and
+Bubblewrap with a root-owned mode-0711 `/opt`.
+
+Helium's build checks its version, desktop entry, and GTK printing libraries.
+The separate headless test checks rendering, JavaScript, storage, and the
+browser's reported namespace/seccomp sandbox status. It uses a temporary profile
+and runs outside Nix's build sandbox. Graphics, audio, web app installation,
+physical printing, and physical scanning need manual testing.
+
+## Updates and CI
+
+Update Helium or the shared Nixpkgs pin with:
 
 ```sh
 python3 scripts/update-helium.py
-python3 scripts/update-helium.py --version 0.18.3.1
-nix build path:.#checks.x86_64-linux.helium
+nix flake update nixpkgs
 ```
 
-Run the runtime check after building:
+The Helium updater accepts `--version` followed by a release tag. It hashes both
+Linux downloads, compares them with GitHub's SHA-256 digests when provided, and
+replaces the manifest only after both architectures succeed. An unchanged entry
+with a matching GitHub digest is reused. Set `GH_TOKEN` or `GITHUB_TOKEN` if needed
+for API rate limits.
 
-```sh
-nix build --out-link result-helium path:.#helium
-python3 tests/helium_smoke.py ./result-helium/bin/helium
-```
+The [Nix workflow](.github/workflows/nix.yml) checks formatting and evaluates both
+architectures on every push and pull request. The [Helium workflow](.github/workflows/helium.yml)
+also builds and runs Helium on both architectures when its package, tests,
+updater, workflow, or flake files change. It checks for releases daily and Nixpkgs
+updates weekly, opening separate `update-helium` and `update-nixpkgs` PRs after
+validation. These PRs are not merged automatically.
 
-This checks rendering, JavaScript, local storage, and the browser's reported
-namespace/seccomp sandbox status using a temporary profile and cache. It runs
-outside Nix's build sandbox, where the browser can create its own namespaces.
-GPU acceleration is disabled for this headless check; graphics, audio, and interactive PWA
-installation still need desktop testing.
-
-The updater verifies both downloaded assets against GitHub's published SHA-256
-digests when provided, and replaces the manifest only after both succeed. It
-accepts `GH_TOKEN` or `GITHUB_TOKEN` for API rate limits. These checksums provide
-integrity checking, not independent signature verification.
-
-The Helium GitHub Actions workflow checks daily for releases and weekly for
-Nixpkgs updates. Release updates use an `update-helium` PR; shared dependency
-updates use a separate `update-nixpkgs` PR. Manual workflow runs can select
-"Refresh Nixpkgs"; locally, use `nix flake update nixpkgs`.
-
-Both update paths evaluate all flake outputs, build Helium, check its version and
-desktop file, and run the runtime smoke test on both Linux architectures before
-opening a PR. Relevant pushes and PRs run the same checks. The Ubuntu CI runners
-use a temporary AppArmor rule scoped to the tested browser binary to allow its
-sandbox; this does not change the package's behavior on NixOS.
-
-Because `flake.lock` is shared, review dependency PRs for effects on the other
-packages too. Those packages are evaluated by CI, but only Helium is built and
-run by this workflow.
-
-The workflow becomes active after publication on the default branch; enable
-"Allow GitHub Actions to create and approve pull requests" in repository Actions
-settings so it can open PRs. Updates are not merged automatically.
+Other packages are evaluated but not built by these workflows. Review changes to
+`flake.lock` for their effect on the whole package set.

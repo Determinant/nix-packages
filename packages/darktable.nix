@@ -225,6 +225,6 @@ stdenv.mkDerivation rec {
     changelog = "https://github.com/darktable-org/darktable/releases/tag/release-${version}";
     mainProgram = "darktable";
     license = lib.licenses.gpl3Plus;
-    platforms = with lib.platforms; linux ++ darwin;
+    platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };
 }

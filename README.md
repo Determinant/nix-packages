@@ -13,6 +13,7 @@ and a Nixpkgs overlay.
 | `darkly`, `darkly-qt5` | Same names | Darkly Qt themes |
 | `darkly-gtk` | `darkly-gtk` | Darkly GTK theme |
 | `brscan-skey` | `brscan-skey` | Brother scan-to-PC button support |
+| `altserver` | `altserver` | AltServer Linux NG, including the NixOS TLS certificate layout |
 | `discord` | `discord` | Discord with the KDE Wayland scaling fix |
 | `ted-google-chrome` | `ted-google-chrome` | Pinned Chrome build with Vulkan/ANGLE flags |
 | `ted-morgen` | `ted-morgen` | Morgen X11 launcher and KDE autostart |
@@ -24,6 +25,8 @@ The default package is `darktable`. The flake targets `x86_64-linux` and
 `ted-morgen`, and `ted-neroaac-bin`, which are x86_64-only and contain unfree
 software. Standalone builds allow those packages; overlay users must allow
 unfree packages in their own Nixpkgs configuration.
+
+`altserver` currently packages the x86_64 release only.
 
 `darkly-qt5` requires a Nixpkgs version that provides the Qt 5 package. It is
 omitted from the standalone outputs when unavailable.
@@ -55,6 +58,36 @@ packages: for example, `pkgs.darktable-latest` and `pkgs.helium`. The overlay us
 your configuration's Nixpkgs; standalone builds use this repository's `flake.lock`.
 
 ## Package notes
+
+### AltServer
+
+```sh
+nix build path:.#altserver
+nix profile add path:.#altserver
+alt-server
+```
+
+The `alt-server` command runs the pinned [AltServer Linux NG release](https://github.com/jaakkopalvaila/AltServer-Linux/releases/tag/ng-2026-11-05)
+in the foreground. It requires a running Avahi daemon and a device transport
+(system usbmuxd for USB, or a separately configured netmuxd for Wi-Fi).
+No services or firewall allowances are enabled by installing the package.
+
+The upstream static executable is unchanged. Bubblewrap supplies its hardcoded
+`/etc/ssl/cert.pem` from Nix's CA bundle and makes `/dev/urandom` usable inside
+that mount namespace. The wrapper does not disable certificate verification or
+modify host `/etc`.
+User namespaces must be available. Python and Avahi's DNS-SD library are supplied
+by the wrapper for Bonjour advertisement.
+
+The upstream default anisette provider is `https://new.ani.sidestore.io`.
+`ALTSERVER_ANISETTE_SERVER` and `ALTSERVER_ANISETTE_PROTOCOL` can override it.
+Keep the existing `$XDG_CONFIG_HOME/AltServer/anisette-v3` identity when migrating
+an installation (normally `~/.config/AltServer/anisette-v3`). Launch the package
+with `alt-server` or `nix run path:.#altserver`.
+
+The server selects a TCP port at startup. The companion `nixos-systems`
+`app-firewall altserver` profile tracks that listener and gates it by interface
+and source IPv4 network; it does not require a patched server or a wide port range.
 
 ### Helium
 
@@ -131,6 +164,7 @@ Run the package checks individually:
 
 ```sh
 nix build path:.#checks.x86_64-linux.morgen-wrapper
+nix build path:.#checks.x86_64-linux.altserver
 nix build path:.#checks.x86_64-linux.brscan-skey
 nix build --out-link result-helium path:.#checks.x86_64-linux.helium
 python3 tests/helium_smoke.py ./result-helium/bin/helium

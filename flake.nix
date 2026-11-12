@@ -51,6 +51,7 @@
           default = darktable;
         }
         // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          altserver = pkgs.callPackage ./packages/altserver.nix { };
           brscan-skey = pkgs.callPackage ./packages/brscan-skey.nix { };
           discord = import ./packages/discord.nix { inherit pkgs; };
           ted-google-chrome = pkgs.callPackage ./packages/google-chrome-wrapper.nix { };
@@ -70,6 +71,7 @@
           helium = self.packages.${system}.helium;
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          altserver = self.packages.${system}.altserver;
           brscan-skey = import ./tests/brscan-skey.nix {
             pkgs = import nixpkgs {
               inherit system;
@@ -103,6 +105,7 @@
           ted-ortho4xp-deps = final.callPackage ./packages/ortho4xp-deps.nix { };
         }
         // prev.lib.optionalAttrs (prev.stdenv.hostPlatform.system == "x86_64-linux") {
+          altserver = final.callPackage ./packages/altserver.nix { };
           brscan-skey = final.callPackage ./packages/brscan-skey.nix { };
           discord = import ./packages/discord.nix {
             pkgs = final;

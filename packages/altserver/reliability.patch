@@ -1,0 +1,699 @@
+--- /dev/null
++++ b/src/ProfilePolicy.h
+@@ -0,0 +1,19 @@
++#pragma once
++#include <optional>
++#include <set>
++#include <string>
++
++// Without an active-app list (CLI installs), there is no evidence that an
++// existing profile is inactive. Let iOS enforce its ordinary app limit.
++inline std::optional<std::set<std::string>> ProfilesToPreserve(
++    const std::optional<std::set<std::string>>& active,
++    const std::set<std::string>& incoming, const std::string& application)
++{
++    if (!active) return std::nullopt;
++    // AltStore can install an app as inactive while all active slots are full.
++    // Keep upstream's temporary removal/restoration path for that operation.
++    if (!active->count(application)) return std::set<std::string>{};
++    auto preserved = *active;
++    preserved.insert(incoming.begin(), incoming.end());
++    return preserved;
++}
+--- a/src/WiredConnection.cpp
++++ b/src/WiredConnection.cpp
+@@ -7,6 +7,7 @@
+ 
+ WiredConnection::~WiredConnection()
+ {
++	this->Disconnect();
+ }
+ 
+ void WiredConnection::Disconnect()
+@@ -28,7 +29,7 @@
+ 		while (data.size() > 0)
+ 		{
+ 			uint32_t sentBytes = 0;
+-			if (idevice_connection_send(this->connection(), (const char*)data.data(), (int32_t)data.size(), &sentBytes) != IDEVICE_E_SUCCESS)
++			if (idevice_connection_send(this->connection(), (const char*)data.data(), (int32_t)data.size(), &sentBytes) != IDEVICE_E_SUCCESS || sentBytes == 0)
+ 			{
+ 				throw ServerError(ServerErrorCode::LostConnection);
+ 			}
+@@ -41,6 +42,7 @@
+ pplx::task<std::vector<unsigned char>> WiredConnection::ReceiveData(int expectedSize)
+ {
+ 	return pplx::create_task([=]() -> std::vector<unsigned char> {
++		if (expectedSize < 0) throw ServerError(ServerErrorCode::UnknownRequest);
+ 		char bytes[4096];
+ 
+ 		std::vector<unsigned char> receivedData;
+@@ -51,8 +53,8 @@
+ 			uint32_t size = std::min((uint32_t)4096, (uint32_t)expectedSize - (uint32_t)receivedData.size());
+ 
+ 			uint32_t receivedBytes = 0;
+-			idevice_error_t result = idevice_connection_receive_timeout(this->connection(), bytes, size, &receivedBytes, 0);
+-			if (result != IDEVICE_E_SUCCESS)
++			idevice_error_t result = idevice_connection_receive_timeout(this->connection(), bytes, size, &receivedBytes, 60000);
++			if (result != IDEVICE_E_SUCCESS || receivedBytes == 0)
+ 			{
+ 				throw ServerError(ServerErrorCode::LostConnection);
+ 			}
+--- /dev/null
++++ b/src/WirelessConnection.cpp
+@@ -0,0 +1,75 @@
++#include "WirelessConnection.h"
++#include "ServerError.hpp"
++
++#include <cerrno>
++#include <chrono>
++#include <poll.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++namespace {
++// An idle peer must release its worker even when the app never closes its socket.
++void WaitForSocket(int fd, short events, std::chrono::steady_clock::time_point deadline)
++{
++    for (;;) {
++        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
++            deadline - std::chrono::steady_clock::now()).count();
++        if (remaining <= 0) throw ServerError(ServerErrorCode::LostConnection);
++        pollfd descriptor{fd, events, 0};
++        int result = poll(&descriptor, 1, static_cast<int>(remaining));
++        if (result < 0 && errno == EINTR) continue;
++        if (result <= 0 || (descriptor.revents & POLLNVAL))
++            throw ServerError(ServerErrorCode::LostConnection);
++        // POLLHUP may accompany the final readable bytes. recv handles EOF.
++        return;
++    }
++}
++}
++
++WirelessConnection::WirelessConnection(int socket, std::chrono::milliseconds sendTimeout)
++    : _socket(socket), _sendTimeout(sendTimeout) {}
++WirelessConnection::~WirelessConnection() { Disconnect(); }
++
++void WirelessConnection::Disconnect()
++{
++    if (_socket < 0) return;
++    close(_socket);
++    _socket = -1;
++}
++
++pplx::task<void> WirelessConnection::SendData(std::vector<unsigned char>& data)
++{
++    return pplx::create_task([this, data]() {
++        auto deadline = std::chrono::steady_clock::now() + _sendTimeout;
++        size_t offset = 0;
++        while (offset < data.size()) {
++            WaitForSocket(_socket, POLLOUT, deadline);
++            ssize_t count = send(_socket, data.data() + offset, data.size() - offset,
++                                 MSG_NOSIGNAL | MSG_DONTWAIT);
++            if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
++            if (count <= 0) throw ServerError(ServerErrorCode::LostConnection);
++            offset += static_cast<size_t>(count);
++        }
++    });
++}
++
++pplx::task<std::vector<unsigned char>> WirelessConnection::ReceiveData(int size)
++{
++    return pplx::create_task([this, size]() {
++        if (size < 0) throw ServerError(ServerErrorCode::UnknownRequest);
++        std::vector<unsigned char> data;
++        data.reserve(size);
++        unsigned char buffer[65536];
++        while (data.size() < static_cast<size_t>(size)) {
++            WaitForSocket(_socket, POLLIN, std::chrono::steady_clock::now() + std::chrono::seconds(60));
++            ssize_t count = recv(_socket, buffer,
++                std::min(sizeof(buffer), static_cast<size_t>(size) - data.size()), MSG_DONTWAIT);
++            if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
++            if (count <= 0) throw ServerError(ServerErrorCode::LostConnection);
++            data.insert(data.end(), buffer, buffer + count);
++        }
++        return data;
++    });
++}
++
++int WirelessConnection::socket() const { return _socket; }
+--- a/upstream_repo/AltServer/ClientConnection.cpp
++++ b/upstream_repo/AltServer/ClientConnection.cpp
+@@ -94,7 +94,8 @@
+ 		catch (std::exception& e)
+ 		{
+ 			auto errorResponse = this->ErrorResponse(e);
+-			this->SendResponse(errorResponse);
++			try { this->SendResponse(errorResponse).get(); }
++			catch (...) { /* Preserve the original request error. */ }
+ 
+ 			throw;
+ 		}		
+@@ -199,24 +200,17 @@
+ {
+ 	return pplx::create_task([this, filepath, udid, activeProfiles]() {
+ 		try {
+-			auto isSending = std::make_shared<bool>();
+-
+-			return DeviceManager::instance()->InstallApp(filepath, udid, activeProfiles, [this, isSending](double progress) {
+-				if (*isSending)
+-				{
+-					return;
+-				}
+-
+-				*isSending = true;
+-
++			return DeviceManager::instance()->InstallApp(filepath, udid, activeProfiles, [this, lastProgress = -1.0](double progress) mutable {
++                // Progress is advisory; reserve 1.0 for the final, cleaned-up result.
++                progress = std::min(progress, 0.99);
++                if (progress < lastProgress + 0.01) return;
++                lastProgress = progress;
+ 				auto response = json::value::object();
+ 				response[L"version"] = json::value::number(1);
+ 				response[L"identifier"] = json::value::string(L"InstallationProgressResponse");
+ 				response[L"progress"] = json::value::number(progress);
+ 
+-				this->SendResponse(response).then([isSending](pplx::task<void> task) {
+-					*isSending = false;
+-					});
++				this->SendResponse(response).get();
+ 				});
+ 		}
+ 		catch (Error& error)
+@@ -474,42 +468,23 @@
+ 
+ pplx::task<void> ClientConnection::SendResponse(web::json::value json)
+ {
+-	auto serializedJSON = json.serialize();
+-	std::vector<unsigned char> responseData(serializedJSON.begin(), serializedJSON.end());
+-
+-	int32_t size = (int32_t)responseData.size();
+-
+-	std::vector<unsigned char> responseSizeData;
+-
+-	if (responseSizeData.size() < sizeof(size))
+-	{
+-		responseSizeData.resize(sizeof(size));
+-	}
+-
+-	std::memcpy(responseSizeData.data(), &size, sizeof(size));
+-
+-	std::cout << "Represented Value: " << *((int32_t*)responseSizeData.data()) << std::endl;
+-
+-	auto task = this->SendData(responseSizeData)
+-	.then([this, responseData]() mutable {
+-		return this->SendData(responseData);
+-	})
+-	.then([](pplx::task<void> task) {
+-		try
+-		{
+-			task.get();
+-		}
+-		catch (Error& error)
+-		{
+-			odslog("Failed to send response. " << error.localizedDescription());
+-		}
+-		catch (std::exception& exception)
+-		{
+-			odslog("Failed to send response. " << exception.what());
+-		}
+-	});
+-
+-	return task;
++    return pplx::create_task([this, json]() {
++        std::lock_guard<std::mutex> lock(_responseMutex);
++        // A partial frame poisons the stream. Never append another response or
++        // pay the send timeout again after the first failure.
++        if (_responseError) std::rethrow_exception(_responseError);
++        try {
++            auto body = json.serialize();
++            int32_t size = static_cast<int32_t>(body.size());
++            std::vector<unsigned char> frame(sizeof(size) + body.size());
++            std::memcpy(frame.data(), &size, sizeof(size));
++            std::copy(body.begin(), body.end(), frame.begin() + sizeof(size));
++            this->SendData(frame).get();
++        } catch (...) {
++            _responseError = std::current_exception();
++            throw;
++        }
++    });
+ }
+ 
+ pplx::task<web::json::value> ClientConnection::ReceiveRequest()
+@@ -520,7 +495,10 @@
+ 
+ 	auto task = this->ReceiveData(size)
+ 	.then([this](std::vector<unsigned char> data) {
+-		int expectedBytes = *((int32_t*)data.data());
++		int32_t expectedBytes = 0;
++		std::memcpy(&expectedBytes, data.data(), sizeof(expectedBytes));
++		if (expectedBytes <= 0 || expectedBytes > 1024 * 1024)
++			throw ServerError(ServerErrorCode::UnknownRequest);
+ 		std::cout << "Receiving " << expectedBytes << " bytes..." << std::endl;
+ 
+ 		return this->ReceiveData(expectedBytes);
+--- a/upstream_repo/AltServer/ClientConnection.h
++++ b/upstream_repo/AltServer/ClientConnection.h
+@@ -10,6 +10,8 @@
+ 
+ #include <memory>
+ #include <set>
++#include <mutex>
++#include <exception>
+ 
+ class ClientConnection
+ {
+@@ -35,6 +37,8 @@
+ 	virtual pplx::task<std::vector<unsigned char>> ReceiveData(int size) = 0;
+ 
+ private:
++    std::mutex _responseMutex;
++    std::exception_ptr _responseError;
+ 	pplx::task<std::string> ReceiveApp(web::json::value request);
+ 	pplx::task<void> InstallApp(std::string filepath, std::string udid, std::optional<std::set<std::string>> activeProfiles);
+ 
+--- a/upstream_repo/AltServer/ConnectionManager.cpp
++++ b/upstream_repo/AltServer/ConnectionManager.cpp
+@@ -97,6 +97,7 @@
+ void ConnectionManager::Disconnect(std::shared_ptr<ClientConnection> connection)
+ {
+ 	connection->Disconnect();
++	std::lock_guard<std::mutex> lock(_connectionsLock);
+ 	_connections.erase(connection);
+ }
+ 
+@@ -326,7 +327,10 @@
+ 
+ void ConnectionManager::HandleRequest(std::shared_ptr<ClientConnection> clientConnection)
+ {
+-	this->_connections.insert(clientConnection);
++	{
++		std::lock_guard<std::mutex> lock(_connectionsLock);
++		this->_connections.insert(clientConnection);
++	}
+ 
+ 	clientConnection->ProcessAppRequest().then([=](pplx::task<void> task) {
+ 		try
+@@ -358,6 +362,7 @@
+ 
+ std::set<std::shared_ptr<ClientConnection>> ConnectionManager::connections() const
+ {
++    std::lock_guard<std::mutex> lock(_connectionsLock);
+     return _connections;
+ }
+ 
+--- a/upstream_repo/AltServer/ConnectionManager.hpp
++++ b/upstream_repo/AltServer/ConnectionManager.hpp
+@@ -35,6 +35,7 @@
+ 
+ 	int _mDNSResponderSocket;
+ 	std::set<std::shared_ptr<ClientConnection>> _connections;
++	mutable std::mutex _connectionsLock;
+ 	std::map<std::string, std::shared_ptr<NotificationConnection>> _notificationConnections;
+ 
+ 	std::mutex _notificationConnectionsLock;
+--- a/upstream_repo/AltServer/DeviceManager.cpp
++++ b/upstream_repo/AltServer/DeviceManager.cpp
+@@ -21,6 +21,8 @@
+ #include <fstream>
+ #include <sstream>
+ #include <condition_variable>
++#include <chrono>
++#include "ProfilePolicy.h"
+ 
+ #include "Archiver.hpp"
+ #include "ServerError.hpp"
+@@ -92,11 +94,11 @@
+ 	idevice_event_subscribe(DeviceDidChangeConnectionStatus, NULL);
+ }
+ 
+-pplx::task<void> DeviceManager::InstallApp(std::string appFilepath, std::string deviceUDID, std::optional<std::set<std::string>> activeProfiles, std::function<void(double)> progressCompletionHandler)
++pplx::task<void> DeviceManager::InstallApp(std::string appFilepath, std::string deviceUDID, std::optional<std::set<std::string>> activeProfiles, std::function<void(double)> progressCompletionHandler, std::chrono::milliseconds statusTimeout)
+ {
+ 	return pplx::task<void>([=] {
+ 		// Enforce only one installation at a time.
+-		this->_mutex.lock();
++		std::unique_lock<std::mutex> installationLock(this->_mutex);
+ 
+ 		auto UUID = make_uuid();
+ 
+@@ -119,11 +121,26 @@
+ 		auto installedProfiles = std::make_shared<std::vector<std::shared_ptr<ProvisioningProfile>>>();
+ 		auto cachedProfiles = std::make_shared<std::map<std::string, std::shared_ptr<ProvisioningProfile>>>();
+ 
+-		auto finish = [this, installedProfiles, cachedProfiles, activeProfiles, temporaryDirectory, &uuidString]
++		// Callback state outlives finish(), which joins the worker on every exit path.
++		std::mutex waitingMutex;
++		std::condition_variable cv;
++
++		std::optional<ServerError> serverError = std::nullopt;
++		std::optional<LocalizedError> localizedError = std::nullopt;
++
++		bool didFinishInstalling = false;
++        bool installationSucceeded = false;
++        std::exception_ptr progressError;
++        auto lastActivity = std::chrono::steady_clock::now();
++
++
++		auto finish = [this, installedProfiles, cachedProfiles, activeProfiles, temporaryDirectory, UUID, &uuidString, &installationSucceeded]
+ 		(idevice_t device, lockdownd_client_t client, instproxy_client_t ipc, afc_client_t afc, misagent_client_t mis, lockdownd_service_descriptor_t service)
+ 		{
++            // Stop callbacks before restoring profiles or destroying their state.
++            instproxy_client_free(ipc);
++            this->_installationProgressHandlers.erase(UUID);
+ 			auto cleanUp = [=]() {
+-				instproxy_client_free(ipc);
+ 				afc_client_free(afc);
+ 				lockdownd_client_free(client);
+ 				misagent_client_free(mis);
+@@ -132,49 +149,34 @@
+ 
+ 				free(uuidString);
+ 
+-				this->_mutex.unlock();
+ 				fs::remove_all(temporaryDirectory);
+ 			};
+ 
+-			try
+-			{
+-				if (activeProfiles.has_value())
+-				{
+-					// Remove installed provisioning profiles if they're not active.
+-					for (auto& installedProfile : *installedProfiles)
+-					{
+-						if (std::count(activeProfiles->begin(), activeProfiles->end(), installedProfile->bundleIdentifier()) == 0)
+-						{
+-							this->RemoveProvisioningProfile(installedProfile, mis);
+-						}
+-					}
+-				}
+-
+-				for (auto& pair : *cachedProfiles)
+-				{
+-					BOOL reinstall = true;
+-
+-					for (auto& installedProfile : *installedProfiles)
+-					{
+-						if (installedProfile->bundleIdentifier() == pair.second->bundleIdentifier())
+-						{
+-							// Don't reinstall cached profile because it was installed with app.
+-							reinstall = false;
+-							break;
+-						}
+-					}
+-
+-					if (reinstall)
+-					{
+-						this->InstallProvisioningProfile(pair.second, mis);
+-					}					
+-				}				
+-			}
+-			catch (std::exception& exception)
+-			{
+-				cleanUp();
+-				throw;
+-			}
++            // Try every restoration even if an earlier cleanup operation fails.
++            std::exception_ptr cleanupError;
++            if (mis && activeProfiles) {
++                for (auto& profile : *installedProfiles) {
++                    if (activeProfiles->count(profile->bundleIdentifier())) continue;
++                    try { this->RemoveProvisioningProfile(profile, mis); }
++                    catch (const ServerError& error) {
++                        // Failed installs may never have installed the incoming profile.
++                        if (error.code() != static_cast<int>(ServerErrorCode::ProfileNotFound) && !cleanupError)
++                            cleanupError = std::current_exception();
++                    }
++                    catch (...) { if (!cleanupError) cleanupError = std::current_exception(); }
++                }
++            }
++            for (auto& pair : *cachedProfiles) {
++                bool replaced = installationSucceeded && std::any_of(installedProfiles->begin(), installedProfiles->end(),
++                    [&](const auto& profile) { return profile->bundleIdentifier() == pair.first; });
++                if (replaced) continue;
++                try { this->InstallProvisioningProfile(pair.second, mis); }
++                catch (...) { if (!cleanupError) cleanupError = std::current_exception(); }
++            }
++            if (cleanupError) {
++                cleanUp();
++                std::rethrow_exception(cleanupError);
++            }
+ 
+ 			// Clean up outside scope so if an exception is thrown, we don't
+ 			// catch it ourselves again.
+@@ -268,6 +270,8 @@
+ 				throw ServerError(ServerErrorCode::ConnectionFailed);
+ 			}
+ 
++            lockdownd_service_descriptor_free(service);
++            service = NULL;
+ 
+ 			/* Connect to AFC service */
+ 			if ((lockdownd_start_service(client, "com.apple.afc", &service) != LOCKDOWN_E_SUCCESS) || service == NULL)
+@@ -307,8 +311,6 @@
+ 
+ 			std::cout << "Writing to device..." << std::endl;
+ 
+-			plist_t options = instproxy_client_options_new();
+-			instproxy_client_options_add(options, "PackageType", "Developer", NULL);
+ 
+ 			fs::path destinationPath = stagingPath.append(appBundlePath.filename().string());
+ 
+@@ -386,60 +388,55 @@
+ 			bool shouldManageProfiles = (activeProfiles.has_value() || (application->provisioningProfile() != NULL && application->provisioningProfile()->isFreeProvisioningProfile()));
+ 			if (shouldManageProfiles)
+ 			{				
+-				// Free developer account was used to sign this app, so we need to remove all
+-				// provisioning profiles in order to remain under sideloaded app limit.
+-
+-				auto removedProfiles = this->RemoveAllFreeProvisioningProfilesExcludingBundleIdentifiers({}, mis);
+-				for (auto& pair : removedProfiles)
+-				{
+-					if (activeProfiles.has_value())
+-					{
+-						if (activeProfiles->count(pair.first) > 0)
+-						{
+-							// Only cache active profiles to reinstall afterwards.
+-							(*cachedProfiles)[pair.first] = pair.second;
+-						}
+-					}
+-					else
+-					{
+-						// Cache all profiles to reinstall afterwards if we didn't provide activeProfiles.
+-						(*cachedProfiles)[pair.first] = pair.second;
+-					}
+-				}				
++				// Keep profiles for active apps and the app being updated. Removing the
++				// last profile for a developer also discards the device's trust.
++				std::set<std::string> incoming;
++				for (const auto& profile : *installedProfiles)
++					incoming.insert(profile->bundleIdentifier());
++				auto preserved = ProfilesToPreserve(activeProfiles, incoming, application->bundleIdentifier());
++                if (preserved) {
++                    // Snapshot active profiles before the first removal, so even a
++                    // partially failed removal can restore apps already deactivated.
++                    for (auto& profile : this->CopyProvisioningProfiles(mis)) {
++                        const auto& bundle = profile->bundleIdentifier();
++                        if (!profile->isFreeProvisioningProfile() || preserved->count(bundle) || !activeProfiles->count(bundle)) continue;
++                        auto previous = (*cachedProfiles)[bundle];
++                        auto expiration = profile->expirationDate();
++                        auto previousExpiration = previous ? previous->expirationDate() : timeval{};
++                        if (!previous || timercmp(&expiration, &previousExpiration, >))
++                            (*cachedProfiles)[bundle] = profile;
++                    }
++                    this->RemoveAllFreeProvisioningProfilesExcludingBundleIdentifiers(*preserved, mis);
++                }
+ 			}
+ 
+ 			lockdownd_client_free(client);
+ 			client = NULL;
+ 
+-			std::mutex waitingMutex;
+-			std::condition_variable cv;
+-
+-			std::optional<ServerError> serverError = std::nullopt;
+-			std::optional<LocalizedError> localizedError = std::nullopt;
+-
+-			bool didBeginInstalling = false;
+-			bool didFinishInstalling = false;
+-
+-			// Capture &finish by reference to avoid implicit copies of installedProfiles and cachedProfiles, resulting in memory leaks.
+-			this->_installationProgressHandlers[UUID] = [device, client, ipc, afc, mis, service, &finish, &progressCompletionHandler, 
+-				&waitingMutex, &cv, &didBeginInstalling, &didFinishInstalling, &serverError, &localizedError](double progress, int resultCode, char *name, char *description) {
++
++			this->_installationProgressHandlers[UUID] = [&progressCompletionHandler,
++				&waitingMutex, &cv, &didFinishInstalling, &serverError, &localizedError, &progressError, &lastActivity](double progress, int resultCode, char *name, char *description, bool complete) {
++                std::unique_lock<std::mutex> lock(waitingMutex);
++                if (didFinishInstalling) return;
++                lastActivity = std::chrono::steady_clock::now();
++                cv.notify_all();
+ 				double weightedProgress = progress * 0.25;
+ 				double adjustedProgress = weightedProgress + 0.75;
+ 
+-				if (progress == 0 && didBeginInstalling)
++				if (complete || resultCode != 0 || name != NULL)
+ 				{
+ 					if (resultCode != 0 || name != NULL)
+ 					{
+ 						if (resultCode == -402620383)
+ 						{
+ 							std::map<std::string, std::string> userInfo = {
+-                                { NSLocalizedDescriptionKey, description },
++                                { NSLocalizedDescriptionKey, description ? description : "Installation failed" },
+ 							};
+ 							serverError = std::make_optional<ServerError>(ServerErrorCode::MaximumFreeAppLimitReached, userInfo);
+ 						}
+ 						else
+ 						{
+-							std::string errorName(name);
++							std::string errorName(name ? name : "InstallationError");
+ 
+ 							if (errorName == "DeviceOSVersionTooLow")
+ 							{
+@@ -447,34 +444,52 @@
+ 							}
+ 							else
+ 							{
+-								localizedError = std::make_optional<LocalizedError>(resultCode, description);
++								localizedError = std::make_optional<LocalizedError>(resultCode, description ? description : "Installation failed");
+ 							}
+ 						}
+ 					}
+ 
+-					std::lock_guard<std::mutex> lock(waitingMutex);
+ 					didFinishInstalling = true;
+ 					cv.notify_all();
+ 				}
+ 				else
+ 				{
+-					progressCompletionHandler(adjustedProgress);
++                    lock.unlock();
++                    // Exceptions must never unwind through libimobiledevice's C callback.
++                    try { progressCompletionHandler(std::min(adjustedProgress, 0.99)); }
++                    catch (...) {
++                        lock.lock();
++                        progressError = std::current_exception();
++                        didFinishInstalling = true;
++                        cv.notify_all();
++                    }
+ 				}
+ 
+-				didBeginInstalling = true;
+ 			};
+ 
+ 			auto narrowDestinationPath = StringFromWideString(destinationPath.c_str());
+ 			std::replace(narrowDestinationPath.begin(), narrowDestinationPath.end(), '\\', '/');
+ 
+-			instproxy_install(ipc, narrowDestinationPath.c_str(), options, DeviceManagerUpdateStatus, uuidString);
++            plist_t options = instproxy_client_options_new();
++            instproxy_client_options_add(options, "PackageType", "Developer", NULL);
++            lastActivity = std::chrono::steady_clock::now();
++			auto installResult = instproxy_install(ipc, narrowDestinationPath.c_str(), options, DeviceManagerUpdateStatus, uuidString);
+ 			instproxy_client_options_free(options);
++			if (installResult != INSTPROXY_E_SUCCESS)
++				throw ServerError(ServerErrorCode::ConnectionFailed);
+ 
+ 			// Wait until we're finished installing;
+ 			std::unique_lock<std::mutex> lock(waitingMutex);
+-			cv.wait(lock, [&didFinishInstalling] { return didFinishInstalling; });
+-
+-			lock.unlock();
++            while (!didFinishInstalling) {
++                if (cv.wait_until(lock, lastActivity + statusTimeout) == std::cv_status::timeout &&
++                    !didFinishInstalling && std::chrono::steady_clock::now() >= lastActivity + statusTimeout) {
++                    didFinishInstalling = true;
++                    progressError = std::make_exception_ptr(ServerError(ServerErrorCode::LostConnection));
++                }
++            }
++            auto failure = progressError;
++            lock.unlock();
++            if (failure) std::rethrow_exception(failure);
+ 
+ 			if (serverError.has_value())
+ 			{
+@@ -484,7 +499,8 @@
+ 			if (localizedError.has_value())
+ 			{
+ 				throw localizedError.value();
+-			}			
++			}
++            installationSucceeded = true;
+ 		}
+ 		catch (std::exception& exception)
+ 		{
+@@ -551,8 +567,9 @@
+     {
+         uint32_t count = 0;
+         
+-        if (afc_file_write(client, af, (const char *)data.data() + bytesWritten, (uint32_t)data.size() - bytesWritten, &count) != AFC_E_SUCCESS)
++        if (afc_file_write(client, af, (const char *)data.data() + bytesWritten, (uint32_t)data.size() - bytesWritten, &count) != AFC_E_SUCCESS || count == 0)
+         {
++            afc_file_close(client, af);
+             throw ServerError(ServerErrorCode::DeviceWriteFailed);
+         }
+         
+@@ -1766,7 +1783,13 @@
+ 	double progress = ((double)percent / 100.0);
+ 
+ 	auto progressHandler = DeviceManager::instance()->_installationProgressHandlers[(char*)uuid];
+-	progressHandler(progress, code, name, description);
++	char* statusName = NULL;
++	instproxy_status_get_name(status, &statusName);
++	bool complete = statusName && std::string(statusName) == "Complete";
++	progressHandler(progress, code, name, description, complete);
++	free(statusName);
++	free(name);
++	free(description);
+ }
+ 
+ void DeviceManagerUpdateAppDeletionStatus(plist_t command, plist_t status, void* uuid)
+--- a/upstream_repo/AltServer/DeviceManager.hpp
++++ b/upstream_repo/AltServer/DeviceManager.hpp
+@@ -16,6 +16,7 @@
+ #include <map>
+ #include <set>
+ #include <mutex>
++#include <chrono>
+ 
+ #include <pplx/pplxtasks.h>
+ #include <libimobiledevice/afc.h>
+@@ -39,7 +40,7 @@
+ 
+ 	void Start();
+ 
+-	pplx::task<void> InstallApp(std::string filepath, std::string deviceUDID, std::optional<std::set<std::string>> activeProvisioningProfiles, std::function<void(double)> progressCompletionHandler);
++	pplx::task<void> InstallApp(std::string filepath, std::string deviceUDID, std::optional<std::set<std::string>> activeProvisioningProfiles, std::function<void(double)> progressCompletionHandler, std::chrono::milliseconds statusTimeout = std::chrono::minutes(5));
+ 	pplx::task<void> RemoveApp(std::string bundleIdentifier, std::string deviceUDID);
+ 
+ 	pplx::task<std::shared_ptr<WiredConnection>> StartWiredConnection(std::shared_ptr<Device> device);
+@@ -73,7 +74,7 @@
+ 
+ 	std::mutex _mutex;
+ 
+-	std::map<std::string, std::function<void(double, int, char *, char *)>> _installationProgressHandlers;
++	std::map<std::string, std::function<void(double, int, char *, char *, bool)>> _installationProgressHandlers;
+ 	std::map<std::string, std::function<void(bool, int, char*, char*)>> _deletionCompletionHandlers;
+ 
+ 	std::function<void(std::shared_ptr<Device>)> _connectedDeviceCallback;
+--- a/upstream_repo/AltServer/WirelessConnection.h
++++ b/upstream_repo/AltServer/WirelessConnection.h
+@@ -1,11 +1,12 @@
+ #pragma once
+ 
+ #include "ClientConnection.h"
++#include <chrono>
+ 
+ class WirelessConnection: public ClientConnection
+ {
+ public:
+-	WirelessConnection(int socket);
++	WirelessConnection(int socket, std::chrono::milliseconds sendTimeout = std::chrono::seconds(10));
+ 	virtual ~WirelessConnection();
+ 
+ 	virtual void Disconnect();
+@@ -17,5 +18,6 @@
+ 
+ private:
+ 	int _socket;
++    std::chrono::milliseconds _sendTimeout;
+ };
+ 

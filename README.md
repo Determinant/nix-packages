@@ -72,10 +72,37 @@ in the foreground. It requires a running Avahi daemon and a device transport
 (system usbmuxd for USB, or a separately configured netmuxd for Wi-Fi).
 No services or firewall allowances are enabled by installing the package.
 
-The upstream static executable is unchanged. Bubblewrap supplies its hardcoded
-`/etc/ssl/cert.pem` from Nix's CA bundle and makes `/dev/urandom` usable inside
-that mount namespace. The wrapper does not disable certificate verification or
-modify host `/etc`.
+The package builds the pinned release source with local reliability fixes. It
+keeps profiles for active apps and the app being updated instead of removing all
+free-developer profiles before every installation. This avoids deliberately
+emptying the developer's profile set; device trust still needs on-device
+verification, and changing the signing certificate can still require trust.
+CLI installs without an active-app list leave existing profiles in place and let
+iOS enforce the usual free-app limit. When AltStore installs an app as inactive
+because the active slots are full, the server temporarily removes profiles and
+restores the active apps afterwards, including on failed installs. This special
+case can still require developer trust. Explicit activation/deactivation and
+profile-only refresh requests retain upstream behavior.
+
+The patch also handles partial TCP writes and closed peers, bounds idle reads,
+serializes installation progress responses, and recognizes installation errors
+on the very first callback. Completion is taken from the installation service's
+`Complete` status instead of guessing from a zero-percent progress update. A
+stalled installation times out after five minutes without a status callback and
+releases the install worker. TCP/USB reads allow up to 60 seconds of inactivity
+between chunks. A TCP response has a ten-second send deadline; a failed response
+aborts installation and later notifications fail immediately. Device callbacks
+hand errors back to the installation task before profile restoration begins.
+
+The Alpine compiler image is pinned by digest and Nix hash and is used only
+during the Nix sandbox build through PRoot; Docker is not required. `nix build`
+also runs USB/TCP transport tests, installation transaction tests with a mocked
+device API, and a daemon protocol/connection-cleanup test. These cover inactive
+installs at the app limit, errors before the first progress update, stalled
+callbacks, partial profile removal, and repeated installs after failures. The
+installed executable is static. Bubblewrap supplies its hardcoded `/etc/ssl/cert.pem` from Nix's CA
+bundle and makes `/dev/urandom` usable inside that mount namespace. The wrapper
+does not disable certificate verification or modify host `/etc`.
 User namespaces must be available. Python and Avahi's DNS-SD library are supplied
 by the wrapper for Bonjour advertisement.
 
@@ -87,7 +114,15 @@ with `alt-server` or `nix run path:.#altserver`.
 
 The server selects a TCP port at startup. The companion `nixos-systems`
 `app-firewall altserver` profile tracks that listener and gates it by interface
-and source IPv4 network; it does not require a patched server or a wide port range.
+and source IPv4 network. The tracker checks executable bytes, so the system's
+`pkgs.altserver` must be updated together with this patched package before Wi-Fi
+connections can reach it. A profile-only upgrade does not update that allowlist.
+
+For a device check, start the updated server, install the same IPA twice from
+AltStore, and verify that both attempts finish and the second does not ask to
+trust the developer again. Keep the same Apple account, AltStore installation,
+and anisette identity during this check. A successful build does not establish
+that these device-level symptoms are resolved.
 
 ### Helium
 
